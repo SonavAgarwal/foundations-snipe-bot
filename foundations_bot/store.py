@@ -52,10 +52,26 @@ class FamilyGraphSeries:
 @dataclass(frozen=True)
 class VoidedSnipe:
     row_id: int
+    event_type: EventType
+    points: int
     actor_user_id: int
-    target_user_id: int
+    target_user_id: int | None
     family_name: str
+    reason: str | None
     created_at: datetime
+
+
+@dataclass(frozen=True)
+class RecentEvent:
+    row_id: int
+    event_type: EventType
+    family_name: str
+    points: int
+    actor_user_id: int | None
+    target_user_id: int | None
+    reason: str | None
+    created_at: datetime
+    voided_at: datetime | None
 
 
 class FoundationsStore:
@@ -318,11 +334,72 @@ class FoundationsStore:
 
             return VoidedSnipe(
                 row_id=row.id,
+                event_type=row.event_type,
+                points=row.points,
                 actor_user_id=row.actor_user_id or actor_user_id,
-                target_user_id=row.target_user_id or target_user_id,
+                target_user_id=row.target_user_id,
                 family_name=row.family_name,
+                reason=row.reason,
                 created_at=row.created_at,
             )
+
+    def void_event_by_id(
+        self, guild_id: int, row_id: int, voided_by_user_id: int
+    ) -> VoidedSnipe | None:
+        with self.session_factory.begin() as session:
+            row = session.execute(
+                select(EventRow).where(
+                    EventRow.guild_id == guild_id,
+                    EventRow.id == row_id,
+                    EventRow.voided_at.is_(None),
+                )
+            ).scalars().first()
+
+            if row is None:
+                return None
+
+            row.voided_at = datetime.utcnow()
+            row.voided_by_user_id = voided_by_user_id
+            row.void_reason = "Voided by admin"
+
+            return VoidedSnipe(
+                row_id=row.id,
+                event_type=row.event_type,
+                points=row.points,
+                actor_user_id=row.actor_user_id or 0,
+                target_user_id=row.target_user_id,
+                family_name=row.family_name,
+                reason=row.reason,
+                created_at=row.created_at,
+            )
+
+    def get_recent_events(self, guild_id: int, limit: int = 15) -> list[RecentEvent]:
+        with self.session_factory.begin() as session:
+            rows = (
+                session.execute(
+                    select(EventRow)
+                    .where(EventRow.guild_id == guild_id)
+                    .order_by(desc(EventRow.created_at), desc(EventRow.id))
+                    .limit(limit)
+                )
+                .scalars()
+                .all()
+            )
+
+        return [
+            RecentEvent(
+                row_id=row.id,
+                event_type=row.event_type,
+                family_name=row.family_name,
+                points=row.points,
+                actor_user_id=row.actor_user_id,
+                target_user_id=row.target_user_id,
+                reason=row.reason,
+                created_at=row.created_at,
+                voided_at=row.voided_at,
+            )
+            for row in rows
+        ]
 
     def get_scoreboard(self, guild_id: int, include_all_people: bool) -> ScoreboardSnapshot:
         with self.session_factory.begin() as session:

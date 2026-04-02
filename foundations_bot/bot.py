@@ -232,24 +232,41 @@ class FoundationsBot(commands.Bot):
         @app_commands.default_permissions(manage_guild=True)
         @self.tree.command(
             name="void",
-            description="Void the most recent matching snipe for a shooter and target.",
+            description="Void any event by ID, or void the latest matching snipe for a shooter and target.",
             **command_kwargs,
         )
         async def void(
             interaction: discord.Interaction,
-            sender: discord.Member,
-            sniped: discord.Member,
+            event_id: int | None = None,
+            sender: discord.Member | None = None,
+            sniped: discord.Member | None = None,
         ) -> None:
             guild = self._require_guild(interaction)
-            voided = self.store.void_latest_snipe(
-                guild_id=guild.id,
-                actor_user_id=sender.id,
-                target_user_id=sniped.id,
-                voided_by_user_id=interaction.user.id,
-            )
+            voided = None
+            if event_id is not None:
+                voided = self.store.void_event_by_id(
+                    guild_id=guild.id,
+                    row_id=event_id,
+                    voided_by_user_id=interaction.user.id,
+                )
+            elif sender is not None and sniped is not None:
+                voided = self.store.void_latest_snipe(
+                    guild_id=guild.id,
+                    actor_user_id=sender.id,
+                    target_user_id=sniped.id,
+                    voided_by_user_id=interaction.user.id,
+                )
+            else:
+                await interaction.response.send_message(
+                    "Pass either `event_id`, or both `sender` and `sniped`.",
+                    ephemeral=True,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+                return
+
             if voided is None:
                 await interaction.response.send_message(
-                    "No active matching snipe was found.",
+                    "No matching active event was found.",
                     ephemeral=True,
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
@@ -257,11 +274,71 @@ class FoundationsBot(commands.Bot):
 
             created_at = voided.created_at.replace(tzinfo=timezone.utc)
             timestamp = discord.utils.format_dt(created_at, style="f")
+            summary = (
+                f"Voided event `#{voided.row_id}` "
+                f"({voided.event_type.value}, {voided.points:+} for `{voided.family_name}`)"
+            )
+            if voided.event_type.value == "snipe" and voided.target_user_id is not None:
+                summary += f" from <@{voided.actor_user_id}> on <@{voided.target_user_id}>"
+            elif voided.actor_user_id:
+                summary += f" created by <@{voided.actor_user_id}>"
+            summary += f" from {timestamp}."
             await interaction.response.send_message(
-                f"Voided the latest snipe from <@{sender.id}> on <@{sniped.id}> for `{voided.family_name}` from {timestamp}.",
+                summary,
                 ephemeral=True,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
+
+        @app_commands.default_permissions(manage_guild=True)
+        @self.tree.command(
+            name="recent-events",
+            description="Show recent event rows so you can void any of them by ID.",
+            **command_kwargs,
+        )
+        async def recent_events(
+            interaction: discord.Interaction, limit: app_commands.Range[int, 1, 50] = 15
+        ) -> None:
+            guild = self._require_guild(interaction)
+            events = self.store.get_recent_events(guild.id, limit=limit)
+            if not events:
+                await interaction.response.send_message(
+                    "No events found yet.",
+                    ephemeral=True,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+                return
+
+            lines = ["**Recent Events**"]
+            for event in events:
+                status = "VOIDED" if event.voided_at else "ACTIVE"
+                timestamp = event.created_at.replace(tzinfo=timezone.utc).strftime(
+                    "%Y-%m-%d %H:%M UTC"
+                )
+                detail = (
+                    f"#{event.row_id} | {status} | {event.event_type.value} | "
+                    f"`{event.family_name}` | {event.points:+}"
+                )
+                if event.event_type.value == "snipe":
+                    detail += f" | <@{event.actor_user_id}> -> <@{event.target_user_id}>"
+                elif event.actor_user_id is not None:
+                    detail += f" | by <@{event.actor_user_id}>"
+                if event.reason:
+                    detail += f" | {event.reason}"
+                detail += f" | {timestamp}"
+                lines.append(detail)
+
+            chunks = _chunk_message(lines)
+            await interaction.response.send_message(
+                chunks[0],
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            for chunk in chunks[1:]:
+                await interaction.followup.send(
+                    chunk,
+                    ephemeral=True,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
 
         @self.tree.command(
             name="leaderboard",

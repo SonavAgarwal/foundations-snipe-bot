@@ -21,8 +21,10 @@ Manual adjustments:
 - Adjustments count as events and affect family totals, but not personal totals.
 
 Voids:
-- Use `/void` to void only the most recent active snipe row from a specific sender on a specific tagged person.
-- This removes that one 1-point spotting row only. It does not remove other tagged people from the same message, and it does not remove any HOOPing bonus from that message.
+- Use `/void event_id:<id>` to void any active scoring row you want.
+- Or use `/void sender:<member> sniped:<member>` to void the most recent active spotting row for that sender-target pair.
+- Use `/recent-events` to list recent rows and their IDs.
+- Voiding removes exactly that row. If you void a spotting row, it does not remove other tagged people from the same message, and it does not remove any HOOPing bonus from that message.
 
 ## Commands
 
@@ -32,7 +34,8 @@ Admin commands:
 - `/setfam <role/name/NONE> <list of usernames or tags>`
 - `/setchannel <sniping channel>`
 - `/adjust <famname> <points> <reason>`
-- `/void <person who sent the snipe> <person who was sniped>`
+- `/void [event_id] [sender] [sniped]`
+- `/recent-events [limit]`
 
 Public commands:
 - `/leaderboard [full]`
