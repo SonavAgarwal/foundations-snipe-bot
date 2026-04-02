@@ -2,25 +2,35 @@
 
 Foundations Bot is a Discord bot for tracking family points from spotting posts and manual event adjustments. It listens for image posts in one configured spotting channel, stores each scored snipe as its own database row, and aggregates leaderboards and graphs from those rows.
 
+Family membership is role-based. Discord family roles are the source of truth.
+
 ## What It Tracks
 
 Spotting:
+
 - Post an image in the configured spotting channel.
 - Tag the people in the photo.
 - Each tagged eligible person is worth 1 point for the sender's family.
 - A sender can only score the same tagged person once per day.
 - The point is attributed to the sender for the people leaderboard.
+- The bot reacts on the spotting message with the current total active points for that message.
+- If a message has zero active points, the bot reacts with `❌`.
+- The bot does not post a reply when points are counted. Reactions are the scoring feedback.
 
 HOOPing:
+
 - If the sender tags at least two other people from the sender's own family, and there are at least three eligible team members present total, the sender's family gets a 2 point HOOPing bonus.
 - HOOPing points are not attributed to any person.
 - A single post can score both spotting points and a HOOPing bonus.
 
 Manual adjustments:
+
 - Use `/adjust` for POOPing, TikToks, outfit coordination, FC events, or any other admin-scored event.
 - Adjustments count as events and affect family totals, but not personal totals.
+- `/adjust` can target a family directly or use `event_id` to apply the adjustment to an existing event's family.
 
 Voids:
+
 - Use `/void event_id:<id>` to void any active scoring row you want.
 - Or use `/void sender:<member> sniped:<member>` to void the most recent active spotting row for that sender-target pair.
 - Use `/recent-events` to list recent rows and their IDs.
@@ -29,22 +39,26 @@ Voids:
 ## Commands
 
 Admin commands:
+
 - `/set-lship-role <role>`
 - `/set-genmem-role <role>`
 - `/setfam <role/name/NONE> <list of usernames or tags>`
 - `/setchannel <sniping channel>`
-- `/adjust <famname> <points> <reason>`
+- `/adjust <points> <reason> [family] [event_id]`
 - `/void [event_id] [sender] [sniped]`
 - `/recent-events [limit]`
 
 Public commands:
+
 - `/leaderboard [full]`
 - `/graph`
 
 Notes about `/setfam`:
-- `family` can be a plain name, a role mention, or `NONE`.
+
+- `family` can be an exact role name, a role mention, or `NONE`.
 - The `members` argument is a freeform string. Mentions are the most reliable format.
 - Plain usernames and display names are also supported when they match exactly.
+- `/setfam` updates actual Discord roles. The bot needs `Manage Roles`, and the bot role must be above the family roles in the server hierarchy.
 
 ## Behavior Rules
 
@@ -52,6 +66,7 @@ Notes about `/setfam`:
 - The bot only counts messages that include an image attachment.
 - If leadership and general member roles are configured, only members with one of those roles count as eligible spotted people.
 - The sender must also be an eligible member when those roles are configured.
+- The sender's current Discord family role is the source of truth for which family gets points.
 - Family points are always awarded to the sender's family.
 - Individual points only come from spotting rows, never from HOOPing or manual adjustments.
 
@@ -79,18 +94,28 @@ Or run the full stack in Docker:
 docker compose up --build
 ```
 
+If you change Python dependencies, rebuild the image:
+
+```bash
+docker compose build --no-cache bot
+docker compose up
+```
+
 ## Environment Variables
 
 Required:
+
 - `DISCORD_TOKEN`
 - `DB_USER`
 - `DB_PASSWORD`
 - `DB_NAME`
 
 Common optional values:
-- `DISCORD_GUILD_ID` for faster guild-scoped slash command sync during development
+
+- `DISCORD_GUILD_ID` for guild-scoped slash command sync and hard single-server enforcement
 - `BOT_TIMEZONE`, default `America/Los_Angeles`
 - `BOT_NAME`, default `Foundations Bot`
+- `BOT_ADMIN_ROLE` to restrict mutating slash commands to members with that exact role name
 - `DB_HOST`, default `127.0.0.1`
 - `DB_PORT`, default `3306`
 - `PORT`, default `8080`
@@ -127,6 +152,7 @@ bash scripts/deploy_cloud_run.sh
 ```
 
 Cloud Run note:
+
 - Because Discord bots keep a long-lived gateway connection open, the deployment script pins Cloud Run to `min-instances=1` and `max-instances=1`.
 - Local MySQL is fine for local development, but Cloud Run needs a reachable MySQL instance. The intended GCP path is Cloud SQL for MySQL.
 
@@ -135,5 +161,6 @@ Cloud Run note:
 - Storage uses SQLAlchemy 2.0 with typed models instead of the old SQLite-specific backend.
 - Every scored spotting target is stored as an individual event row and aggregated later for reports.
 - The app exposes a lightweight HTTP health endpoint on `/healthz` so Cloud Run has something to probe.
+- If `DISCORD_GUILD_ID` is set, the bot ignores other guilds, rejects commands there, auto-leaves new guilds, and leaves any extra guilds on startup.
 
-Built with Codex 5.4.
+Built somewhat with Codex 5.4.

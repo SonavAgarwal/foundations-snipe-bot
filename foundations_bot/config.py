@@ -49,6 +49,7 @@ class AppConfig:
     http_port: int
     bot_timezone: ZoneInfo
     bot_name: str
+    bot_admin_role: str | None
 
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -61,4 +62,5 @@ class AppConfig:
             http_port=int(os.getenv("PORT", "8080")),
             bot_timezone=ZoneInfo(timezone_name),
             bot_name=os.getenv("BOT_NAME", "Foundations Bot"),
+            bot_admin_role=os.getenv("BOT_ADMIN_ROLE"),
         )

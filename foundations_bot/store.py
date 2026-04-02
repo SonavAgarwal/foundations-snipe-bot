@@ -6,7 +6,7 @@ from datetime import date, datetime
 from sqlalchemy import create_engine, desc, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from foundations_bot.models import Base, EventRow, EventType, FamilyMembership, GuildSettings
+from foundations_bot.models import Base, EventRow, EventType, FamilyRole, GuildSettings
 
 
 @dataclass(frozen=True)
@@ -22,10 +22,12 @@ class MessageRecording:
     recorded_target_ids: list[int]
     duplicate_target_ids: list[int]
     hoop_recorded: bool
+    total_points_for_message: int
 
 
 @dataclass(frozen=True)
 class FamilyScore:
+    role_id: int | None
     family_name: str
     points: int
 
@@ -33,7 +35,6 @@ class FamilyScore:
 @dataclass(frozen=True)
 class PersonScore:
     user_id: int
-    family_name: str | None
     points: int
 
 
@@ -58,6 +59,8 @@ class VoidedSnipe:
     target_user_id: int | None
     family_name: str
     reason: str | None
+    source_message_id: int | None
+    source_channel_id: int | None
     created_at: datetime
 
 
@@ -70,6 +73,21 @@ class RecentEvent:
     actor_user_id: int | None
     target_user_id: int | None
     reason: str | None
+    created_at: datetime
+    voided_at: datetime | None
+
+
+@dataclass(frozen=True)
+class EventReference:
+    row_id: int
+    event_type: EventType
+    family_name: str
+    points: int
+    actor_user_id: int | None
+    target_user_id: int | None
+    reason: str | None
+    source_message_id: int | None
+    source_channel_id: int | None
     created_at: datetime
     voided_at: datetime | None
 
@@ -101,7 +119,7 @@ class FoundationsStore:
         return settings
 
     @staticmethod
-    def _touch(model: GuildSettings | FamilyMembership) -> None:
+    def _touch(model: GuildSettings | FamilyRole) -> None:
         model.updated_at = datetime.utcnow()
 
     def get_guild_settings(self, guild_id: int) -> GuildRuntimeSettings:
@@ -132,62 +150,38 @@ class FoundationsStore:
             settings.genmem_role_id = role_id
             self._touch(settings)
 
-    def set_family_for_users(
-        self, guild_id: int, user_ids: list[int], family_name: str | None
-    ) -> None:
-        if not user_ids:
-            return
-
+    def register_family_role(self, guild_id: int, role_id: int, role_name: str) -> None:
         with self.session_factory.begin() as session:
-            memberships = {
-                membership.user_id: membership
-                for membership in session.execute(
-                    select(FamilyMembership).where(
-                        FamilyMembership.guild_id == guild_id,
-                        FamilyMembership.user_id.in_(user_ids),
-                    )
-                )
-                .scalars()
-                .all()
-            }
-
-            for user_id in user_ids:
-                membership = memberships.get(user_id)
-                if membership is None:
-                    membership = FamilyMembership(
-                        guild_id=guild_id,
-                        user_id=user_id,
-                        family_name=family_name,
-                        updated_at=datetime.utcnow(),
-                    )
-                    session.add(membership)
-                    continue
-
-                membership.family_name = family_name
-                self._touch(membership)
-
-    def get_family_for_user(self, guild_id: int, user_id: int) -> str | None:
-        with self.session_factory.begin() as session:
-            membership = session.execute(
-                select(FamilyMembership).where(
-                    FamilyMembership.guild_id == guild_id,
-                    FamilyMembership.user_id == user_id,
+            family_role = session.execute(
+                select(FamilyRole).where(
+                    FamilyRole.guild_id == guild_id,
+                    FamilyRole.role_id == role_id,
                 )
             ).scalar_one_or_none()
-            return None if membership is None else membership.family_name
-
-    def get_families_for_users(self, guild_id: int, user_ids: list[int]) -> dict[int, str | None]:
-        if not user_ids:
-            return {}
-
-        with self.session_factory.begin() as session:
-            memberships = session.execute(
-                select(FamilyMembership.user_id, FamilyMembership.family_name).where(
-                    FamilyMembership.guild_id == guild_id,
-                    FamilyMembership.user_id.in_(user_ids),
+            if family_role is None:
+                session.add(
+                    FamilyRole(
+                        guild_id=guild_id,
+                        role_id=role_id,
+                        role_name=role_name,
+                        updated_at=datetime.utcnow(),
+                    )
                 )
-            ).all()
-            return {user_id: family_name for user_id, family_name in memberships}
+                return
+
+            family_role.role_name = role_name
+            self._touch(family_role)
+
+    def get_family_roles(self, guild_id: int) -> list[tuple[int, str]]:
+        with self.session_factory.begin() as session:
+            return [
+                (int(role_id), role_name)
+                for role_id, role_name in session.execute(
+                    select(FamilyRole.role_id, FamilyRole.role_name).where(
+                        FamilyRole.guild_id == guild_id
+                    )
+                ).all()
+            ]
 
     def record_message_activity(
         self,
@@ -272,10 +266,15 @@ class FoundationsStore:
                     )
                     hoop_recorded = True
 
+            total_points_for_message = self._active_points_for_message_session(
+                session, guild_id, source_message_id
+            )
+
         return MessageRecording(
             recorded_target_ids=recorded_target_ids,
             duplicate_target_ids=duplicate_target_ids,
             hoop_recorded=hoop_recorded,
+            total_points_for_message=total_points_for_message,
         )
 
     def create_adjustment(
@@ -340,6 +339,8 @@ class FoundationsStore:
                 target_user_id=row.target_user_id,
                 family_name=row.family_name,
                 reason=row.reason,
+                source_message_id=row.source_message_id,
+                source_channel_id=row.source_channel_id,
                 created_at=row.created_at,
             )
 
@@ -370,8 +371,26 @@ class FoundationsStore:
                 target_user_id=row.target_user_id,
                 family_name=row.family_name,
                 reason=row.reason,
+                source_message_id=row.source_message_id,
+                source_channel_id=row.source_channel_id,
                 created_at=row.created_at,
             )
+
+    def get_active_points_for_message(self, guild_id: int, source_message_id: int) -> int:
+        with self.session_factory.begin() as session:
+            return self._active_points_for_message_session(session, guild_id, source_message_id)
+
+    def _active_points_for_message_session(
+        self, session: Session, guild_id: int, source_message_id: int
+    ) -> int:
+        total = session.execute(
+            select(func.coalesce(func.sum(EventRow.points), 0)).where(
+                EventRow.guild_id == guild_id,
+                EventRow.source_message_id == source_message_id,
+                EventRow.voided_at.is_(None),
+            )
+        ).scalar_one()
+        return int(total)
 
     def get_recent_events(self, guild_id: int, limit: int = 15) -> list[RecentEvent]:
         with self.session_factory.begin() as session:
@@ -401,6 +420,32 @@ class FoundationsStore:
             for row in rows
         ]
 
+    def get_event_by_id(self, guild_id: int, row_id: int) -> EventReference | None:
+        with self.session_factory.begin() as session:
+            row = session.execute(
+                select(EventRow).where(
+                    EventRow.guild_id == guild_id,
+                    EventRow.id == row_id,
+                )
+            ).scalars().first()
+
+        if row is None:
+            return None
+
+        return EventReference(
+            row_id=row.id,
+            event_type=row.event_type,
+            family_name=row.family_name,
+            points=row.points,
+            actor_user_id=row.actor_user_id,
+            target_user_id=row.target_user_id,
+            reason=row.reason,
+            source_message_id=row.source_message_id,
+            source_channel_id=row.source_channel_id,
+            created_at=row.created_at,
+            voided_at=row.voided_at,
+        )
+
     def get_scoreboard(self, guild_id: int, include_all_people: bool) -> ScoreboardSnapshot:
         with self.session_factory.begin() as session:
             point_rows = session.execute(
@@ -411,25 +456,28 @@ class FoundationsStore:
             ).all()
             family_points = {family_name: int(points) for family_name, points in point_rows}
 
-            membership_names = (
+            tracked_family_roles = (
                 session.execute(
-                    select(FamilyMembership.family_name)
-                    .where(
-                        FamilyMembership.guild_id == guild_id,
-                        FamilyMembership.family_name.is_not(None),
+                    select(FamilyRole.role_id, FamilyRole.role_name).where(
+                        FamilyRole.guild_id == guild_id
                     )
-                    .distinct()
                 )
-                .scalars()
                 .all()
             )
-            for family_name in membership_names:
-                if family_name is not None and family_name not in family_points:
+            for _, family_name in tracked_family_roles:
+                if family_name not in family_points:
                     family_points[family_name] = 0
 
             families = sorted(
                 [
-                    FamilyScore(family_name=family_name, points=points)
+                    FamilyScore(
+                        role_id=next(
+                            (int(role_id) for role_id, role_name in tracked_family_roles if role_name == family_name),
+                            None,
+                        ),
+                        family_name=family_name,
+                        points=points,
+                    )
                     for family_name, points in family_points.items()
                 ],
                 key=lambda row: (-row.points, row.family_name.lower()),
@@ -449,28 +497,17 @@ class FoundationsStore:
                 if user_id is not None
             }
 
-            membership_rows = session.execute(
-                select(FamilyMembership.user_id, FamilyMembership.family_name).where(
-                    FamilyMembership.guild_id == guild_id
-                )
-            ).all()
-            member_families = {int(user_id): family_name for user_id, family_name in membership_rows}
-
-            if include_all_people:
-                people_user_ids = set(member_families) | set(person_points)
-            else:
-                people_user_ids = set(person_points)
+            people_user_ids = set(person_points)
 
             people = sorted(
                 [
                     PersonScore(
                         user_id=user_id,
-                        family_name=member_families.get(user_id),
                         points=person_points.get(user_id, 0),
                     )
                     for user_id in people_user_ids
                 ],
-                key=lambda row: (-row.points, (row.family_name or "~").lower(), row.user_id),
+                key=lambda row: (-row.points, row.user_id),
             )
 
             if not include_all_people:

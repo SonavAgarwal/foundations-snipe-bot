@@ -11,11 +11,24 @@ from discord.ext import commands
 
 from foundations_bot.charts import render_two_week_graph
 from foundations_bot.config import AppConfig
-from foundations_bot.store import FoundationsStore
+from foundations_bot.store import FoundationsStore, PersonScore
 
 
 ROLE_MENTION_RE = re.compile(r"<@&(\d+)>")
 USER_MENTION_RE = re.compile(r"<@!?(\d+)>")
+SCORE_EMOJIS = {
+    0: "❌",
+    1: "1️⃣",
+    2: "2️⃣",
+    3: "3️⃣",
+    4: "4️⃣",
+    5: "5️⃣",
+    6: "6️⃣",
+    7: "7️⃣",
+    8: "8️⃣",
+    9: "9️⃣",
+}
+TRACKED_SCORE_REACTIONS = set(SCORE_EMOJIS.values()) | {"🔟"}
 
 
 def _utc_naive(dt: datetime) -> datetime:
@@ -58,7 +71,8 @@ class FoundationsBot(commands.Bot):
         self.config = config
         self.store = store
         self.command_guild = (
-            discord.Object(id=config.guild_id) if config.guild_id is not None else None
+            discord.Object(
+                id=config.guild_id) if config.guild_id is not None else None
         )
         self._health_runner: web.AppRunner | None = None
         self._register_commands()
@@ -66,6 +80,8 @@ class FoundationsBot(commands.Bot):
     async def setup_hook(self) -> None:
         self._health_runner = await start_health_server(self.config.http_port)
         if self.command_guild is not None:
+            self.tree.clear_commands(guild=None)
+            await self.tree.sync()
             await self.tree.sync(guild=self.command_guild)
             return
         await self.tree.sync()
@@ -77,13 +93,21 @@ class FoundationsBot(commands.Bot):
         await super().close()
 
     async def on_ready(self) -> None:
-        print(f"{self.config.bot_name} ready as {self.user} at {datetime.utcnow().isoformat()}Z")
+        await self._leave_disallowed_guilds()
+        print(
+            f"{self.config.bot_name} ready as {self.user} at {datetime.utcnow().isoformat()}Z")
 
     async def on_message(self, message: discord.Message) -> None:
         if message.author.bot or message.guild is None:
             return
+        if not self._is_allowed_guild_id(message.guild.id):
+            return
 
         await self._handle_spotting_message(message)
+
+    async def on_guild_join(self, guild: discord.Guild) -> None:
+        if not self._is_allowed_guild_id(guild.id):
+            await guild.leave()
 
     def _register_commands(self) -> None:
         command_kwargs = {}
@@ -108,7 +132,6 @@ class FoundationsBot(commands.Bot):
                 allowed_mentions=discord.AllowedMentions.none(),
             )
 
-        @app_commands.default_permissions(manage_guild=True)
         @self.tree.command(
             name="set-lship-role",
             description="Store the leadership role used for spotting validation.",
@@ -117,6 +140,7 @@ class FoundationsBot(commands.Bot):
         async def set_lship_role(
             interaction: discord.Interaction, role: discord.Role
         ) -> None:
+            self._require_bot_admin(interaction)
             guild = self._require_guild(interaction)
             self.store.set_lship_role(guild.id, role.id)
             await interaction.response.send_message(
@@ -125,7 +149,6 @@ class FoundationsBot(commands.Bot):
                 allowed_mentions=discord.AllowedMentions.none(),
             )
 
-        @app_commands.default_permissions(manage_guild=True)
         @self.tree.command(
             name="set-genmem-role",
             description="Store the general member role used for spotting validation.",
@@ -134,6 +157,7 @@ class FoundationsBot(commands.Bot):
         async def set_genmem_role(
             interaction: discord.Interaction, role: discord.Role
         ) -> None:
+            self._require_bot_admin(interaction)
             guild = self._require_guild(interaction)
             self.store.set_genmem_role(guild.id, role.id)
             await interaction.response.send_message(
@@ -142,7 +166,18 @@ class FoundationsBot(commands.Bot):
                 allowed_mentions=discord.AllowedMentions.none(),
             )
 
-        @app_commands.default_permissions(manage_guild=True)
+        @self.tree.command(
+            name="hello",
+            description="Basic connectivity test.",
+            **command_kwargs,
+        )
+        async def hello(interaction: discord.Interaction) -> None:
+            await interaction.response.send_message(
+                "Foundations Bot is online.",
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+
         @self.tree.command(
             name="setchannel",
             description="Bind spotting behavior to a specific channel.",
@@ -151,6 +186,7 @@ class FoundationsBot(commands.Bot):
         async def setchannel(
             interaction: discord.Interaction, channel: discord.TextChannel
         ) -> None:
+            self._require_bot_admin(interaction)
             guild = self._require_guild(interaction)
             self.store.set_sniping_channel(guild.id, channel.id)
             await interaction.response.send_message(
@@ -159,54 +195,106 @@ class FoundationsBot(commands.Bot):
                 allowed_mentions=discord.AllowedMentions.none(),
             )
 
-        @app_commands.default_permissions(manage_guild=True)
         @self.tree.command(
             name="setfam",
-            description="Assign a family to a list of tagged users or usernames.",
+            description="Assign or clear family roles for a list of tagged users or usernames.",
             **command_kwargs,
         )
         async def setfam(
             interaction: discord.Interaction, family: str, members: str
         ) -> None:
+            self._require_bot_admin(interaction)
+            await interaction.response.defer(
+                ephemeral=True,
+                thinking=False,
+            )
             guild = self._require_guild(interaction)
-            resolved_family = self._resolve_family_name(guild, family)
-            resolved_members = self._resolve_members(guild, members)
+            resolved_members = await self._resolve_members(guild, members)
             if not resolved_members:
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     "No members matched. Use mentions if possible.",
                     ephemeral=True,
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
                 return
 
-            self.store.set_family_for_users(
-                guild.id,
-                [member.id for member in resolved_members],
-                resolved_family,
-            )
+            tracked_family_roles = self.store.get_family_roles(guild.id)
+            tracked_role_ids = {role_id for role_id, _ in tracked_family_roles}
+            family_role = self._resolve_family_role(guild, family)
 
-            label = "NONE" if resolved_family is None else resolved_family
-            member_mentions = ", ".join(f"<@{member.id}>" for member in resolved_members)
-            await interaction.response.send_message(
+            if family_role is not None:
+                self.store.register_family_role(
+                    guild.id, family_role.id, family_role.name)
+                tracked_role_ids.add(family_role.id)
+
+            try:
+                for member in resolved_members:
+                    roles_to_remove = [
+                        role for role in member.roles if role.id in tracked_role_ids and role != family_role
+                    ]
+                    if roles_to_remove:
+                        await member.remove_roles(*roles_to_remove, reason="Foundations Bot /setfam")
+                    if family_role is not None and family_role not in member.roles:
+                        await member.add_roles(family_role, reason="Foundations Bot /setfam")
+            except discord.Forbidden as error:
+                raise app_commands.AppCommandError(
+                    "I need `Manage Roles`, and my bot role must be above the family roles."
+                ) from error
+            except discord.HTTPException as error:
+                raise app_commands.AppCommandError(
+                    "Discord rejected the role update.") from error
+
+            label = "NONE" if family_role is None else family_role.name
+            member_mentions = ", ".join(
+                f"<@{member.id}>" for member in resolved_members)
+            await interaction.followup.send(
                 f"Set family `{label}` for {member_mentions}.",
                 ephemeral=True,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
 
-        @app_commands.default_permissions(manage_guild=True)
         @self.tree.command(
             name="adjust",
-            description="Add or subtract family points with a reason.",
+            description="Add or subtract points for a family or an existing event's family.",
             **command_kwargs,
         )
         async def adjust(
-            interaction: discord.Interaction, family: str, points: int, reason: str
+            interaction: discord.Interaction,
+            points: int,
+            reason: str,
+            family: str | None = None,
+            event_id: int | None = None,
         ) -> None:
+            self._require_bot_admin(interaction)
             guild = self._require_guild(interaction)
-            resolved_family = self._resolve_family_name(guild, family)
-            if resolved_family is None:
+            family_name: str | None = None
+
+            if event_id is not None:
+                event = self.store.get_event_by_id(guild.id, event_id)
+                if event is None:
+                    await interaction.response.send_message(
+                        "That event ID was not found.",
+                        ephemeral=True,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                    return
+                family_name = event.family_name
+                reason = f"{reason} (adjustment for event #{event_id})"
+            elif family is not None:
+                family_role = self._resolve_family_role(guild, family)
+                if family_role is None:
+                    await interaction.response.send_message(
+                        "Adjustments need a real family role, not NONE.",
+                        ephemeral=True,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                    return
+                self.store.register_family_role(
+                    guild.id, family_role.id, family_role.name)
+                family_name = family_role.name
+            else:
                 await interaction.response.send_message(
-                    "Adjustments need a real family name, not NONE.",
+                    "Pass either `family` or `event_id`.",
                     ephemeral=True,
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
@@ -216,7 +304,7 @@ class FoundationsBot(commands.Bot):
             event_date = now.astimezone(self.config.bot_timezone).date()
             self.store.create_adjustment(
                 guild_id=guild.id,
-                family_name=resolved_family,
+                family_name=family_name,
                 points=points,
                 reason=reason,
                 actor_user_id=interaction.user.id,
@@ -224,12 +312,11 @@ class FoundationsBot(commands.Bot):
                 created_at=_utc_naive(now),
             )
             await interaction.response.send_message(
-                f"Adjusted `{resolved_family}` by {points} point(s). Reason: {reason}",
+                f"Adjusted `{family_name}` by {points} point(s). Reason: {reason}",
                 ephemeral=True,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
 
-        @app_commands.default_permissions(manage_guild=True)
         @self.tree.command(
             name="void",
             description="Void any event by ID, or void the latest matching snipe for a shooter and target.",
@@ -241,6 +328,7 @@ class FoundationsBot(commands.Bot):
             sender: discord.Member | None = None,
             sniped: discord.Member | None = None,
         ) -> None:
+            self._require_bot_admin(interaction)
             guild = self._require_guild(interaction)
             voided = None
             if event_id is not None:
@@ -272,21 +360,20 @@ class FoundationsBot(commands.Bot):
                 )
                 return
 
-            created_at = voided.created_at.replace(tzinfo=timezone.utc)
-            timestamp = discord.utils.format_dt(created_at, style="f")
-            summary = (
-                f"Voided event `#{voided.row_id}` "
-                f"({voided.event_type.value}, {voided.points:+} for `{voided.family_name}`)"
-            )
+            summary = f"<@{interaction.user.id}> voided {voided.event_type.value} `#{voided.row_id}`"
             if voided.event_type.value == "snipe" and voided.target_user_id is not None:
                 summary += f" from <@{voided.actor_user_id}> on <@{voided.target_user_id}>"
             elif voided.actor_user_id:
-                summary += f" created by <@{voided.actor_user_id}>"
-            summary += f" from {timestamp}."
+                summary += f" by <@{voided.actor_user_id}>"
+            summary += "."
+            await self._refresh_score_reaction(
+                guild,
+                voided.source_channel_id,
+                voided.source_message_id,
+            )
             await interaction.response.send_message(
                 summary,
-                ephemeral=True,
-                allowed_mentions=discord.AllowedMentions.none(),
+                allowed_mentions=discord.AllowedMentions(users=True),
             )
 
         @app_commands.default_permissions(manage_guild=True)
@@ -298,6 +385,7 @@ class FoundationsBot(commands.Bot):
         async def recent_events(
             interaction: discord.Interaction, limit: app_commands.Range[int, 1, 50] = 15
         ) -> None:
+            self._require_bot_admin(interaction)
             guild = self._require_guild(interaction)
             events = self.store.get_recent_events(guild.id, limit=limit)
             if not events:
@@ -310,22 +398,20 @@ class FoundationsBot(commands.Bot):
 
             lines = ["**Recent Events**"]
             for event in events:
-                status = "VOIDED" if event.voided_at else "ACTIVE"
-                timestamp = event.created_at.replace(tzinfo=timezone.utc).strftime(
-                    "%Y-%m-%d %H:%M UTC"
-                )
-                detail = (
-                    f"#{event.row_id} | {status} | {event.event_type.value} | "
-                    f"`{event.family_name}` | {event.points:+}"
-                )
+                timestamp = event.created_at.replace(tzinfo=timezone.utc).astimezone(
+                    self.config.bot_timezone
+                ).strftime("%H:%M")
                 if event.event_type.value == "snipe":
-                    detail += f" | <@{event.actor_user_id}> -> <@{event.target_user_id}>"
+                    lines.append(
+                        f"`{event.row_id}` <@{event.actor_user_id}> -> <@{event.target_user_id}> {timestamp}"
+                    )
                 elif event.actor_user_id is not None:
-                    detail += f" | by <@{event.actor_user_id}>"
-                if event.reason:
-                    detail += f" | {event.reason}"
-                detail += f" | {timestamp}"
-                lines.append(detail)
+                    lines.append(
+                        f"`{event.row_id}` {event.event_type.value} by <@{event.actor_user_id}> {timestamp}"
+                    )
+                else:
+                    lines.append(
+                        f"`{event.row_id}` {event.event_type.value} {timestamp}")
 
             chunks = _chunk_message(lines)
             await interaction.response.send_message(
@@ -349,20 +435,44 @@ class FoundationsBot(commands.Bot):
             interaction: discord.Interaction, full: bool = False
         ) -> None:
             guild = self._require_guild(interaction)
-            snapshot = self.store.get_scoreboard(guild.id, include_all_people=full)
+            snapshot = self.store.get_scoreboard(
+                guild.id, include_all_people=full)
+            settings = self.store.get_guild_settings(guild.id)
 
-            lines = ["**Family Standings**"]
+            lines = ["**Fam Standings**"]
             if snapshot.families:
                 for index, family in enumerate(snapshot.families, start=1):
-                    lines.append(f"{index}. `{family.family_name}` - {family.points}")
+                    lines.append(
+                        f"{index}. `{family.family_name}` - {family.points}")
             else:
                 lines.append("No family points yet.")
 
             lines.append("")
             lines.append("**People**")
-            if snapshot.people:
-                for index, person in enumerate(snapshot.people, start=1):
-                    family_suffix = f" ({person.family_name})" if person.family_name else ""
+            people = snapshot.people
+            if full:
+                point_map = {
+                    row.user_id: row.points for row in snapshot.people}
+                people = [
+                    PersonScore(user_id=member.id,
+                                points=point_map.get(member.id, 0))
+                    for member in guild.members
+                    if not member.bot
+                    and self._member_has_trackable_role(
+                        member, settings.lship_role_id, settings.genmem_role_id
+                    )
+                ]
+                people = sorted(
+                    people, key=lambda row: (-row.points, row.user_id))
+
+            if people:
+                for index, person in enumerate(people[:5] if not full else people, start=1):
+                    member = guild.get_member(person.user_id)
+                    current_family = (
+                        self._current_family_name(
+                            guild, member) if member is not None else None
+                    )
+                    family_suffix = f" ({current_family})" if current_family else ""
                     lines.append(
                         f"{index}. <@{person.user_id}>{family_suffix} - {person.points}"
                     )
@@ -387,7 +497,8 @@ class FoundationsBot(commands.Bot):
             guild = self._require_guild(interaction)
             now = discord.utils.utcnow().astimezone(self.config.bot_timezone).date()
             start_date = now - timedelta(days=13)
-            graph_series = self.store.get_family_graph_series(guild.id, start_date, now)
+            graph_series = self.store.get_family_graph_series(
+                guild.id, start_date, now)
             if not graph_series:
                 await interaction.response.send_message(
                     "No point activity exists in the last two weeks.",
@@ -404,10 +515,47 @@ class FoundationsBot(commands.Bot):
 
     def _require_guild(self, interaction: discord.Interaction) -> discord.Guild:
         if interaction.guild is None:
-            raise app_commands.AppCommandError("This command only works in a server.")
+            raise app_commands.AppCommandError(
+                "This command only works in a server.")
+        if not self._is_allowed_guild_id(interaction.guild.id):
+            raise app_commands.AppCommandError(
+                "This bot is restricted to a different server.")
         return interaction.guild
 
-    def _resolve_family_name(self, guild: discord.Guild, raw_value: str) -> str | None:
+    def _require_bot_admin(self, interaction: discord.Interaction) -> None:
+        self._require_guild(interaction)
+        if not isinstance(interaction.user, discord.Member):
+            raise app_commands.AppCommandError(
+                "This command only works for server members.")
+
+        configured_role = self.config.bot_admin_role
+        if configured_role:
+            normalized_role = configured_role.casefold()
+            if any(role.name.casefold() == normalized_role for role in interaction.user.roles):
+                return
+            raise app_commands.AppCommandError(
+                f"You need the `{configured_role}` role to use this command."
+            )
+
+        if interaction.user.guild_permissions.manage_guild or interaction.user.guild_permissions.manage_roles:
+            return
+
+        raise app_commands.AppCommandError(
+            "You do not have permission to use this command.")
+
+    def _is_allowed_guild_id(self, guild_id: int) -> bool:
+        if self.config.guild_id is None:
+            return True
+        return guild_id == self.config.guild_id
+
+    async def _leave_disallowed_guilds(self) -> None:
+        if self.config.guild_id is None:
+            return
+        for guild in list(self.guilds):
+            if guild.id != self.config.guild_id:
+                await guild.leave()
+
+    def _resolve_family_role(self, guild: discord.Guild, raw_value: str) -> discord.Role | None:
         stripped = raw_value.strip()
         if stripped.upper() == "NONE":
             return None
@@ -416,16 +564,30 @@ class FoundationsBot(commands.Bot):
         if match:
             role = guild.get_role(int(match.group(1)))
             if role is None:
-                raise app_commands.AppCommandError("That family role could not be found.")
-            return role.name
+                raise app_commands.AppCommandError(
+                    "That family role could not be found.")
+            return role
 
-        return stripped
+        role = discord.utils.get(guild.roles, name=stripped)
+        if role is None:
+            raise app_commands.AppCommandError(
+                "That family role could not be found by name.")
+        return role
 
-    def _resolve_members(self, guild: discord.Guild, raw_value: str) -> list[discord.Member]:
+    async def _resolve_members(
+        self, guild: discord.Guild, raw_value: str
+    ) -> list[discord.Member]:
         found: dict[int, discord.Member] = {}
 
         for user_id in USER_MENTION_RE.findall(raw_value):
             member = guild.get_member(int(user_id))
+            if member is None:
+                try:
+                    member = await guild.fetch_member(int(user_id))
+                except discord.NotFound:
+                    member = None
+                except discord.HTTPException:
+                    member = None
             if member is not None:
                 found[member.id] = member
 
@@ -441,10 +603,17 @@ class FoundationsBot(commands.Bot):
         for token in tokens:
             if not token:
                 continue
+            normalized_token = token.lstrip("@").strip()
+            if not normalized_token:
+                continue
 
-            member = discord.utils.get(guild.members, name=token)
+            member = discord.utils.get(guild.members, name=normalized_token)
             if member is None:
-                member = discord.utils.get(guild.members, display_name=token)
+                member = discord.utils.get(
+                    guild.members, display_name=normalized_token)
+            if member is None:
+                member = discord.utils.get(
+                    guild.members, global_name=normalized_token)
             if member is not None:
                 found[member.id] = member
 
@@ -454,10 +623,58 @@ class FoundationsBot(commands.Bot):
         self, member: discord.Member, lship_role_id: int | None, genmem_role_id: int | None
     ) -> bool:
         role_ids = {role.id for role in member.roles}
-        configured_role_ids = {role_id for role_id in (lship_role_id, genmem_role_id) if role_id}
+        configured_role_ids = {role_id for role_id in (
+            lship_role_id, genmem_role_id) if role_id}
         if not configured_role_ids:
             return not member.bot
         return bool(role_ids & configured_role_ids)
+
+    def _current_family_role(
+        self, guild: discord.Guild, member: discord.Member
+    ) -> discord.Role | None:
+        tracked_family_roles = {
+            role_id: guild.get_role(role_id) for role_id, _ in self.store.get_family_roles(guild.id)
+        }
+        member_family_roles = [
+            role for role in member.roles if role.id in tracked_family_roles and tracked_family_roles[role.id] is not None
+        ]
+        if not member_family_roles:
+            return None
+        member_family_roles.sort(key=lambda role: role.position, reverse=True)
+        return member_family_roles[0]
+
+    def _current_family_name(
+        self, guild: discord.Guild, member: discord.Member
+    ) -> str | None:
+        family_role = self._current_family_role(guild, member)
+        return None if family_role is None else family_role.name
+
+    def _score_reaction_emoji(self, total_points: int) -> str:
+        if total_points >= 10:
+            return "🔟"
+        return SCORE_EMOJIS.get(total_points, "❌")
+
+    async def _sync_score_reaction(self, message: discord.Message, total_points: int) -> None:
+        for reaction in message.reactions:
+            if str(reaction.emoji) in TRACKED_SCORE_REACTIONS and reaction.me:
+                await message.remove_reaction(reaction.emoji, self.user)
+        await message.add_reaction(self._score_reaction_emoji(total_points))
+
+    async def _refresh_score_reaction(
+        self, guild: discord.Guild, channel_id: int | None, message_id: int | None
+    ) -> None:
+        if channel_id is None or message_id is None:
+            return
+        channel = guild.get_channel(channel_id)
+        if channel is None or not isinstance(channel, discord.TextChannel):
+            return
+        try:
+            message = await channel.fetch_message(message_id)
+        except discord.NotFound:
+            return
+        total_points = self.store.get_active_points_for_message(
+            guild.id, message_id)
+        await self._sync_score_reaction(message, total_points)
 
     def _image_attachment_url(self, message: discord.Message) -> str | None:
         for attachment in message.attachments:
@@ -483,16 +700,15 @@ class FoundationsBot(commands.Bot):
         if not self._member_has_trackable_role(
             message.author, settings.lship_role_id, settings.genmem_role_id
         ):
+            await self._sync_score_reaction(message, 0)
             return
 
-        sender_family = self.store.get_family_for_user(message.guild.id, message.author.id)
-        if sender_family is None:
-            await message.reply(
-                "No family is set for you yet. Use `/setfam` first.",
-                mention_author=False,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
+        sender_family_role = self._current_family_role(
+            message.guild, message.author)
+        if sender_family_role is None:
+            await self._sync_score_reaction(message, 0)
             return
+        sender_family = sender_family_role.name
 
         unique_mentions: dict[int, discord.Member] = {}
         for member in message.mentions:
@@ -505,20 +721,24 @@ class FoundationsBot(commands.Bot):
             unique_mentions[member.id] = member
 
         if not unique_mentions:
+            await self._sync_score_reaction(message, 0)
             return
 
         mentioned_members = list(unique_mentions.values())
         mentioned_ids = [member.id for member in mentioned_members]
-        families = self.store.get_families_for_users(message.guild.id, [message.author.id, *mentioned_ids])
 
         present_team_members = {message.author.id, *mentioned_ids}
         same_family_tagged_count = sum(
-            1 for member in mentioned_members if families.get(member.id) == sender_family
+            1
+            for member in mentioned_members
+            if any(role.id == sender_family_role.id for role in member.roles)
         )
-        award_hoop = len(present_team_members) >= 3 and same_family_tagged_count >= 2
+        award_hoop = len(
+            present_team_members) >= 3 and same_family_tagged_count >= 2
 
         created_at = _utc_naive(message.created_at)
-        event_date = message.created_at.astimezone(self.config.bot_timezone).date()
+        event_date = message.created_at.astimezone(
+            self.config.bot_timezone).date()
         recording = self.store.record_message_activity(
             guild_id=message.guild.id,
             actor_user_id=message.author.id,
@@ -533,34 +753,9 @@ class FoundationsBot(commands.Bot):
         )
 
         if not recording.recorded_target_ids and not recording.hoop_recorded:
-            if recording.duplicate_target_ids:
-                duplicate_mentions = ", ".join(
-                    f"<@{user_id}>" for user_id in recording.duplicate_target_ids
-                )
-                await message.reply(
-                    f"No new snipe points recorded. Already counted today for {duplicate_mentions}.",
-                    mention_author=False,
-                    allowed_mentions=discord.AllowedMentions.none(),
-                )
+            await self._sync_score_reaction(message, recording.total_points_for_message)
             return
-
-        summary_lines = [f"Recorded points for `{sender_family}`."]
-        if recording.recorded_target_ids:
-            targets = ", ".join(f"<@{user_id}>" for user_id in recording.recorded_target_ids)
-            summary_lines.append(
-                f"Snipe points: +{len(recording.recorded_target_ids)} from {targets}."
-            )
-        if recording.hoop_recorded:
-            summary_lines.append("HOOPing bonus: +2.")
-        if recording.duplicate_target_ids:
-            duplicates = ", ".join(f"<@{user_id}>" for user_id in recording.duplicate_target_ids)
-            summary_lines.append(f"Skipped already-counted-today targets: {duplicates}.")
-
-        await message.reply(
-            "\n".join(summary_lines),
-            mention_author=False,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
+        await self._sync_score_reaction(message, recording.total_points_for_message)
 
 
 async def start_health_server(port: int) -> web.AppRunner:

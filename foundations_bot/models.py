@@ -32,12 +32,12 @@ class GuildSettings(Base):
     )
 
 
-class FamilyMembership(Base):
-    __tablename__ = "family_memberships"
+class FamilyRole(Base):
+    __tablename__ = "family_roles"
 
     guild_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    family_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    role_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    role_name: Mapped[str] = mapped_column(String(100), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
     )
