@@ -67,6 +67,9 @@ Common optional values:
 - `SQLITE_PATH`, default `data/foundations_bot.db`
 - `DATABASE_URL` only if you want to override SQLite manually
 
+Warning:
+- If `BOT_ADMIN_ROLE` is left blank, mutating commands fall back to Discord `Manage Server` or `Manage Roles` permissions instead of one specific admin role.
+
 ## Local Run
 
 1. Copy `.env.example` to `.env`.
