@@ -98,6 +98,30 @@ Recommended shape:
 - repo cloned onto the VM
 - SQLite stored on the VM disk in `./data/foundations_bot.db`
 
+Create a cheap VM on GCP:
+
+```bash
+gcloud compute instances create foundations-bot-vm \
+  --zone=us-central1-a \
+  --machine-type=e2-micro \
+  --boot-disk-size=20GB \
+  --image-family=ubuntu-2204-lts \
+  --image-project=ubuntu-os-cloud
+```
+
+SSH into it:
+
+```bash
+gcloud compute ssh foundations-bot-vm --zone=us-central1-a
+```
+
+Install git on the VM:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y git
+```
+
 First-time Docker install on Ubuntu:
 
 ```bash
@@ -125,6 +149,7 @@ Useful VM commands:
 docker logs -f foundations-bot
 docker restart foundations-bot
 docker exec -it foundations-bot /bin/bash
+bash scripts/reset_sqlite.sh
 ```
 
 ## Implementation Notes

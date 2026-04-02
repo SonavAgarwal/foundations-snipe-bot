@@ -118,19 +118,22 @@ class FoundationsBot(commands.Bot):
         async def on_tree_error(
             interaction: discord.Interaction, error: app_commands.AppCommandError
         ) -> None:
-            if interaction.response.is_done():
-                await interaction.followup.send(
+            try:
+                if interaction.response.is_done():
+                    await interaction.followup.send(
+                        f"Command failed: {error}",
+                        ephemeral=True,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                    return
+
+                await interaction.response.send_message(
                     f"Command failed: {error}",
                     ephemeral=True,
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
+            except discord.NotFound:
                 return
-
-            await interaction.response.send_message(
-                f"Command failed: {error}",
-                ephemeral=True,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
 
         @self.tree.command(
             name="set-lship-role",
@@ -386,10 +389,14 @@ class FoundationsBot(commands.Bot):
             interaction: discord.Interaction, limit: app_commands.Range[int, 1, 50] = 15
         ) -> None:
             self._require_bot_admin(interaction)
+            await interaction.response.defer(
+                ephemeral=True,
+                thinking=False,
+            )
             guild = self._require_guild(interaction)
             events = self.store.get_recent_events(guild.id, limit=limit)
             if not events:
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     "No events found yet.",
                     ephemeral=True,
                     allowed_mentions=discord.AllowedMentions.none(),
@@ -414,7 +421,7 @@ class FoundationsBot(commands.Bot):
                         f"`{event.row_id}` {event.event_type.value} {timestamp}")
 
             chunks = _chunk_message(lines)
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 chunks[0],
                 ephemeral=True,
                 allowed_mentions=discord.AllowedMentions.none(),
@@ -434,6 +441,7 @@ class FoundationsBot(commands.Bot):
         async def leaderboard(
             interaction: discord.Interaction, full: bool = False
         ) -> None:
+            await interaction.response.defer(thinking=False)
             guild = self._require_guild(interaction)
             snapshot = self.store.get_scoreboard(
                 guild.id, include_all_people=full)
@@ -480,7 +488,7 @@ class FoundationsBot(commands.Bot):
                 lines.append("No individual spotting points yet.")
 
             chunks = _chunk_message(lines)
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 chunks[0], allowed_mentions=discord.AllowedMentions.none()
             )
             for chunk in chunks[1:]:
@@ -494,13 +502,14 @@ class FoundationsBot(commands.Bot):
             **command_kwargs,
         )
         async def graph(interaction: discord.Interaction) -> None:
+            await interaction.response.defer(thinking=False)
             guild = self._require_guild(interaction)
             now = discord.utils.utcnow().astimezone(self.config.bot_timezone).date()
             start_date = now - timedelta(days=13)
             graph_series = self.store.get_family_graph_series(
                 guild.id, start_date, now)
             if not graph_series:
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     "No point activity exists in the last two weeks.",
                     ephemeral=True,
                     allowed_mentions=discord.AllowedMentions.none(),
@@ -508,7 +517,7 @@ class FoundationsBot(commands.Bot):
                 return
 
             image = render_two_week_graph(graph_series, start_date, now)
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 file=discord.File(image, filename="foundations-graph.png"),
                 allowed_mentions=discord.AllowedMentions.none(),
             )
