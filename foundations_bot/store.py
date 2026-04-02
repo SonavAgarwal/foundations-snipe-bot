@@ -94,14 +94,14 @@ class EventReference:
 
 class FoundationsStore:
     def __init__(self, database_url: str) -> None:
-        self.engine = create_engine(
-            database_url,
-            future=True,
-            pool_pre_ping=True,
-            pool_recycle=1800,
-            pool_size=5,
-            max_overflow=2,
-        )
+        engine_kwargs = {"future": True}
+        if database_url.startswith("sqlite"):
+            engine_kwargs["connect_args"] = {"check_same_thread": False}
+        else:
+            engine_kwargs["pool_pre_ping"] = True
+            engine_kwargs["pool_recycle"] = 1800
+
+        self.engine = create_engine(database_url, **engine_kwargs)
         self.session_factory = sessionmaker(bind=self.engine, expire_on_commit=False)
 
     def initialize(self) -> None:

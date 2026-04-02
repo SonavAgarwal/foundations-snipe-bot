@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
-from urllib.parse import quote_plus
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 
@@ -21,24 +21,9 @@ def _optional_int(name: str) -> int | None:
 
 
 def _build_database_url() -> str:
-    user = _require_env("DB_USER")
-    password = _require_env("DB_PASSWORD")
-    database = _require_env("DB_NAME")
-    instance_connection_name = os.getenv("INSTANCE_CONNECTION_NAME")
-
-    if instance_connection_name:
-        return (
-            "mysql+pymysql://"
-            f"{quote_plus(user)}:{quote_plus(password)}@/"
-            f"{quote_plus(database)}?unix_socket=/cloudsql/{instance_connection_name}"
-        )
-
-    host = os.getenv("DB_HOST", "127.0.0.1")
-    port = os.getenv("DB_PORT", "3306")
-    return (
-        "mysql+pymysql://"
-        f"{quote_plus(user)}:{quote_plus(password)}@{host}:{port}/{quote_plus(database)}"
-    )
+    sqlite_path = Path(os.getenv("SQLITE_PATH", "data/foundations_bot.db")).expanduser()
+    sqlite_path.parent.mkdir(parents=True, exist_ok=True)
+    return f"sqlite:///{sqlite_path.resolve()}"
 
 
 @dataclass(frozen=True)
