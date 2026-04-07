@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+import random
 import re
 
 from aiohttp import web
@@ -29,6 +30,8 @@ SCORE_EMOJIS = {
     9: "9️⃣",
 }
 TRACKED_SCORE_REACTIONS = set(SCORE_EMOJIS.values()) | {"🔟"}
+NO_FAMILY_REACTIONS = ("🔥", "📸", "🤨", "💀", "❤️", "🙏")
+TRACKED_SCORE_REACTIONS.update(NO_FAMILY_REACTIONS)
 
 
 def _utc_naive(dt: datetime) -> datetime:
@@ -663,11 +666,14 @@ class FoundationsBot(commands.Bot):
             return "🔟"
         return SCORE_EMOJIS.get(total_points, "❌")
 
-    async def _sync_score_reaction(self, message: discord.Message, total_points: int) -> None:
+    async def _sync_reaction_emoji(self, message: discord.Message, emoji: str) -> None:
         for reaction in message.reactions:
             if str(reaction.emoji) in TRACKED_SCORE_REACTIONS and reaction.me:
                 await message.remove_reaction(reaction.emoji, self.user)
-        await message.add_reaction(self._score_reaction_emoji(total_points))
+        await message.add_reaction(emoji)
+
+    async def _sync_score_reaction(self, message: discord.Message, total_points: int) -> None:
+        await self._sync_reaction_emoji(message, self._score_reaction_emoji(total_points))
 
     async def _refresh_score_reaction(
         self, guild: discord.Guild, channel_id: int | None, message_id: int | None
@@ -715,7 +721,7 @@ class FoundationsBot(commands.Bot):
         sender_family_role = self._current_family_role(
             message.guild, message.author)
         if sender_family_role is None:
-            await self._sync_score_reaction(message, 0)
+            await self._sync_reaction_emoji(message, random.choice(NO_FAMILY_REACTIONS))
             return
         sender_family = sender_family_role.name
 

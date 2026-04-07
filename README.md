@@ -14,6 +14,7 @@ Spotting:
 - The point is attributed to the sender for the people leaderboard.
 - The bot reacts on the spotting message with the current total active points for that message.
 - If a message has zero active points, the bot reacts with `❌`.
+- If the sender is eligible but does not have a tracked family role, the bot reacts with `🔥`, `📸`, or `🤨` and records no points.
 - The bot does not post a reply when points are counted. Reactions are the scoring feedback.
 
 HOOPing:
