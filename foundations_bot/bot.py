@@ -458,37 +458,37 @@ class FoundationsBot(commands.Bot):
             else:
                 lines.append("No family points yet.")
 
-            lines.append("")
-            lines.append("**People**")
-            people = snapshot.people
-            if full:
-                point_map = {
-                    row.user_id: row.points for row in snapshot.people}
-                people = [
-                    PersonScore(user_id=member.id,
-                                points=point_map.get(member.id, 0))
-                    for member in guild.members
-                    if not member.bot
-                    and self._member_has_trackable_role(
-                        member, settings.lship_role_id, settings.genmem_role_id
-                    )
-                ]
-                people = sorted(
-                    people, key=lambda row: (-row.points, row.user_id))
+            # lines.append("")
+            # lines.append("**People**")
+            # people = snapshot.people
+            # if full:
+            #     point_map = {
+            #         row.user_id: row.points for row in snapshot.people}
+            #     people = [
+            #         PersonScore(user_id=member.id,
+            #                     points=point_map.get(member.id, 0))
+            #         for member in guild.members
+            #         if not member.bot
+            #         and self._member_has_trackable_role(
+            #             member, settings.lship_role_id, settings.genmem_role_id
+            #         )
+            #     ]
+            #     people = sorted(
+            #         people, key=lambda row: (-row.points, row.user_id))
 
-            if people:
-                for index, person in enumerate(people[:5] if not full else people, start=1):
-                    member = guild.get_member(person.user_id)
-                    current_family = (
-                        self._current_family_name(
-                            guild, member) if member is not None else None
-                    )
-                    family_suffix = f" ({current_family})" if current_family else ""
-                    lines.append(
-                        f"{index}. <@{person.user_id}>{family_suffix} - {person.points}"
-                    )
-            else:
-                lines.append("No individual spotting points yet.")
+            # if people:
+            #     for index, person in enumerate(people[:5] if not full else people, start=1):
+            #         member = guild.get_member(person.user_id)
+            #         current_family = (
+            #             self._current_family_name(
+            #                 guild, member) if member is not None else None
+            #         )
+            #         family_suffix = f" ({current_family})" if current_family else ""
+            #         lines.append(
+            #             f"{index}. <@{person.user_id}>{family_suffix} - {person.points}"
+            #         )
+            # else:
+            #     lines.append("No individual spotting points yet.")
 
             chunks = _chunk_message(lines)
             await interaction.followup.send(
