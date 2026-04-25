@@ -22,6 +22,7 @@ class MessageRecording:
     recorded_target_ids: list[int]
     duplicate_target_ids: list[int]
     hoop_recorded: bool
+    photo_event_id: int | None
     total_points_for_message: int
 
 
@@ -266,6 +267,17 @@ class FoundationsStore:
                     )
                     hoop_recorded = True
 
+            photo_event_id = self._ensure_photo_reference_event_session(
+                session=session,
+                guild_id=guild_id,
+                actor_user_id=actor_user_id,
+                family_name=family_name,
+                source_message_id=source_message_id,
+                source_channel_id=source_channel_id,
+                attachment_url=attachment_url,
+                event_date=event_date,
+                created_at=created_at,
+            )
             total_points_for_message = self._active_points_for_message_session(
                 session, guild_id, source_message_id
             )
@@ -274,8 +286,73 @@ class FoundationsStore:
             recorded_target_ids=recorded_target_ids,
             duplicate_target_ids=duplicate_target_ids,
             hoop_recorded=hoop_recorded,
+            photo_event_id=photo_event_id,
             total_points_for_message=total_points_for_message,
         )
+
+    def ensure_photo_reference_event(
+        self,
+        guild_id: int,
+        actor_user_id: int,
+        family_name: str,
+        source_message_id: int,
+        source_channel_id: int,
+        attachment_url: str | None,
+        event_date: date,
+        created_at: datetime,
+    ) -> int | None:
+        with self.session_factory.begin() as session:
+            return self._ensure_photo_reference_event_session(
+                session=session,
+                guild_id=guild_id,
+                actor_user_id=actor_user_id,
+                family_name=family_name,
+                source_message_id=source_message_id,
+                source_channel_id=source_channel_id,
+                attachment_url=attachment_url,
+                event_date=event_date,
+                created_at=created_at,
+            )
+
+    def _ensure_photo_reference_event_session(
+        self,
+        session: Session,
+        guild_id: int,
+        actor_user_id: int,
+        family_name: str,
+        source_message_id: int,
+        source_channel_id: int,
+        attachment_url: str | None,
+        event_date: date,
+        created_at: datetime,
+    ) -> int | None:
+        existing_for_message = session.execute(
+            select(EventRow.id).where(
+                EventRow.guild_id == guild_id,
+                EventRow.source_message_id == source_message_id,
+            )
+        ).scalars().first()
+        if existing_for_message is not None:
+            return None
+
+        row = EventRow(
+            guild_id=guild_id,
+            event_type=EventType.PHOTO,
+            family_name=family_name,
+            points=0,
+            actor_user_id=actor_user_id,
+            attributed_user_id=None,
+            target_user_id=None,
+            source_message_id=source_message_id,
+            source_channel_id=source_channel_id,
+            attachment_url=attachment_url,
+            event_date=event_date,
+            reason="Photo reference",
+            created_at=created_at,
+        )
+        session.add(row)
+        session.flush()
+        return row.id
 
     def create_adjustment(
         self,
@@ -286,6 +363,9 @@ class FoundationsStore:
         actor_user_id: int,
         event_date: date,
         created_at: datetime,
+        source_message_id: int | None = None,
+        source_channel_id: int | None = None,
+        attachment_url: str | None = None,
     ) -> None:
         with self.session_factory.begin() as session:
             session.add(
@@ -297,9 +377,9 @@ class FoundationsStore:
                     actor_user_id=actor_user_id,
                     attributed_user_id=None,
                     target_user_id=None,
-                    source_message_id=None,
-                    source_channel_id=None,
-                    attachment_url=None,
+                    source_message_id=source_message_id,
+                    source_channel_id=source_channel_id,
+                    attachment_url=attachment_url,
                     event_date=event_date,
                     reason=reason,
                     created_at=created_at,

@@ -274,6 +274,7 @@ class FoundationsBot(commands.Bot):
             self._require_bot_admin(interaction)
             guild = self._require_guild(interaction)
             family_name: str | None = None
+            event = None
 
             if event_id is not None:
                 event = self.store.get_event_by_id(guild.id, event_id)
@@ -287,10 +288,10 @@ class FoundationsBot(commands.Bot):
                 family_name = event.family_name
                 reason = f"{reason} (adjustment for event #{event_id})"
             elif family is not None:
-                family_role = self._resolve_family_role(guild, family)
+                family_role = await self._resolve_adjust_family_role(guild, family)
                 if family_role is None:
                     await interaction.response.send_message(
-                        "Adjustments need a real family role, not NONE.",
+                        "Adjustments need a real family role or a member with a family role.",
                         ephemeral=True,
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
@@ -308,6 +309,8 @@ class FoundationsBot(commands.Bot):
 
             now = discord.utils.utcnow()
             event_date = now.astimezone(self.config.bot_timezone).date()
+            source_message_id = event.source_message_id if event is not None else None
+            source_channel_id = event.source_channel_id if event is not None else None
             self.store.create_adjustment(
                 guild_id=guild.id,
                 family_name=family_name,
@@ -316,6 +319,13 @@ class FoundationsBot(commands.Bot):
                 actor_user_id=interaction.user.id,
                 event_date=event_date,
                 created_at=_utc_naive(now),
+                source_message_id=source_message_id,
+                source_channel_id=source_channel_id,
+            )
+            await self._refresh_score_reaction(
+                guild,
+                source_channel_id,
+                source_message_id,
             )
             await interaction.response.send_message(
                 f"Adjusted `{family_name}` by {points} point(s). Reason: {reason}",
@@ -414,6 +424,11 @@ class FoundationsBot(commands.Bot):
                 if event.event_type.value == "snipe":
                     lines.append(
                         f"`{event.row_id}` <@{event.actor_user_id}> -> <@{event.target_user_id}> {timestamp}"
+                    )
+                elif event.event_type.value == "photo":
+                    lines.append(
+                        f"`{event.row_id}` photo by <@{event.actor_user_id}> "
+                        f"({event.family_name}, 0 pts) {timestamp}"
                     )
                 elif event.actor_user_id is not None:
                     lines.append(
@@ -586,6 +601,21 @@ class FoundationsBot(commands.Bot):
                 "That family role could not be found by name.")
         return role
 
+    async def _resolve_adjust_family_role(
+        self, guild: discord.Guild, raw_value: str
+    ) -> discord.Role | None:
+        try:
+            return self._resolve_family_role(guild, raw_value)
+        except app_commands.AppCommandError:
+            pass
+
+        members = await self._resolve_members(guild, raw_value)
+        if len(members) != 1:
+            raise app_commands.AppCommandError(
+                "That family value must be a family role or exactly one member."
+            )
+        return self._current_family_role(guild, members[0])
+
     async def _resolve_members(
         self, guild: discord.Guild, raw_value: str
     ) -> list[discord.Member]:
@@ -712,18 +742,32 @@ class FoundationsBot(commands.Bot):
         if image_url is None:
             return
 
-        if not self._member_has_trackable_role(
-            message.author, settings.lship_role_id, settings.genmem_role_id
-        ):
-            await self._sync_score_reaction(message, 0)
-            return
-
         sender_family_role = self._current_family_role(
             message.guild, message.author)
         if sender_family_role is None:
             await self._sync_reaction_emoji(message, random.choice(NO_FAMILY_REACTIONS))
             return
         sender_family = sender_family_role.name
+
+        created_at = _utc_naive(message.created_at)
+        event_date = message.created_at.astimezone(
+            self.config.bot_timezone).date()
+
+        if not self._member_has_trackable_role(
+            message.author, settings.lship_role_id, settings.genmem_role_id
+        ):
+            self.store.ensure_photo_reference_event(
+                guild_id=message.guild.id,
+                actor_user_id=message.author.id,
+                family_name=sender_family,
+                source_message_id=message.id,
+                source_channel_id=message.channel.id,
+                attachment_url=image_url,
+                event_date=event_date,
+                created_at=created_at,
+            )
+            await self._sync_score_reaction(message, 0)
+            return
 
         unique_mentions: dict[int, discord.Member] = {}
         for member in message.mentions:
@@ -736,6 +780,16 @@ class FoundationsBot(commands.Bot):
             unique_mentions[member.id] = member
 
         if not unique_mentions:
+            self.store.ensure_photo_reference_event(
+                guild_id=message.guild.id,
+                actor_user_id=message.author.id,
+                family_name=sender_family,
+                source_message_id=message.id,
+                source_channel_id=message.channel.id,
+                attachment_url=image_url,
+                event_date=event_date,
+                created_at=created_at,
+            )
             await self._sync_score_reaction(message, 0)
             return
 
@@ -751,9 +805,6 @@ class FoundationsBot(commands.Bot):
         award_hoop = len(
             present_team_members) >= 3 and same_family_tagged_count >= 2
 
-        created_at = _utc_naive(message.created_at)
-        event_date = message.created_at.astimezone(
-            self.config.bot_timezone).date()
         recording = self.store.record_message_activity(
             guild_id=message.guild.id,
             actor_user_id=message.author.id,

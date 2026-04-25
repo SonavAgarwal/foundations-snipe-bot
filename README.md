@@ -14,6 +14,7 @@ Spotting:
 - The point is attributed to the sender for the people leaderboard.
 - The bot reacts on the spotting message with the current total active points for that message.
 - If a message has zero active points, the bot reacts with `❌`.
+- Zero-point photo rows still get event IDs when the sender has a registered family role, so admins can target the photo with `/adjust event_id:<id>`.
 - If the sender is eligible but does not have a tracked family role, the bot reacts with `🔥`, `📸`, or `🤨` and records no points.
 - The bot does not post a reply when points are counted. Reactions are the scoring feedback.
 
@@ -25,7 +26,7 @@ HOOPing:
 Manual adjustments:
 - Use `/adjust` for POOPing, TikToks, outfit coordination, FC events, or any other admin-scored event.
 - Adjustments count as events and affect family totals, but not personal totals.
-- `/adjust` can target a family directly or use `event_id` to apply the adjustment to an existing event's family.
+- `/adjust` can target a family directly, use a member mention/name to target that member's family, or use `event_id` to apply the adjustment to an existing event's family. Event-based adjustments update the original photo reaction.
 
 Voids:
 - Use `/void event_id:<id>` to void any active scoring row you want.

@@ -13,6 +13,7 @@ class Base(DeclarativeBase):
 
 class EventType(str, Enum):
     SNIPE = "snipe"
+    PHOTO = "photo"
     HOOP = "hoop"
     ADJUSTMENT = "adjustment"
 
