@@ -500,6 +500,34 @@ class FoundationsStore:
             for row in rows
         ]
 
+    def get_recent_adjustment_target(
+        self, guild_id: int, position: int
+    ) -> EventReference | None:
+        if position < 1:
+            return None
+
+        with self.session_factory.begin() as session:
+            row = (
+                session.execute(
+                    select(EventRow)
+                    .where(
+                        EventRow.guild_id == guild_id,
+                        EventRow.event_type != EventType.ADJUSTMENT,
+                        EventRow.voided_at.is_(None),
+                    )
+                    .order_by(desc(EventRow.created_at), desc(EventRow.id))
+                    .offset(position - 1)
+                    .limit(1)
+                )
+                .scalars()
+                .first()
+            )
+
+        if row is None:
+            return None
+
+        return self._event_reference(row)
+
     def get_event_by_id(self, guild_id: int, row_id: int) -> EventReference | None:
         with self.session_factory.begin() as session:
             row = session.execute(
@@ -512,6 +540,10 @@ class FoundationsStore:
         if row is None:
             return None
 
+        return self._event_reference(row)
+
+    @staticmethod
+    def _event_reference(row: EventRow) -> EventReference:
         return EventReference(
             row_id=row.id,
             event_type=row.event_type,

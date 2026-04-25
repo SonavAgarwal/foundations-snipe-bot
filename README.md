@@ -26,7 +26,9 @@ HOOPing:
 Manual adjustments:
 - Use `/adjust` for POOPing, TikToks, outfit coordination, FC events, or any other admin-scored event.
 - Adjustments count as events and affect family totals, but not personal totals.
-- `/adjust` can target a family directly, use a member mention/name to target that member's family, or use `event_id` to apply the adjustment to an existing event's family. Event-based adjustments update the original photo reaction.
+- `/adjust` takes `event_id` first, then `points`. Use a positive event ID, or `-1` for the most recent active non-adjustment event, `-2` for the second most recent, and so on.
+- Use `event_id:0` with `family` to target a family directly. The `family` value can be a family role or a member mention/name to use that member's family.
+- `reason` is optional and is the last `/adjust` option. Event-based adjustments update the original photo reaction.
 
 Voids:
 - Use `/void event_id:<id>` to void any active scoring row you want.
@@ -41,7 +43,7 @@ Admin commands:
 - `/set-genmem-role <role>`
 - `/setfam <role/name/NONE> <list of usernames or tags>`
 - `/setchannel <sniping channel>`
-- `/adjust <points> <reason> [family] [event_id]`
+- `/adjust <event_id> <points> [family] [reason]`
 - `/void [event_id] [sender] [sniped]`
 - `/recent-events [limit]`
 

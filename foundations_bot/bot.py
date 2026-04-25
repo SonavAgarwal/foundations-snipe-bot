@@ -266,17 +266,31 @@ class FoundationsBot(commands.Bot):
         )
         async def adjust(
             interaction: discord.Interaction,
+            event_id: int,
             points: int,
-            reason: str,
             family: str | None = None,
-            event_id: int | None = None,
+            reason: str | None = None,
         ) -> None:
             self._require_bot_admin(interaction)
             guild = self._require_guild(interaction)
             family_name: str | None = None
             event = None
+            reason_text = reason.strip() if reason and reason.strip() else "Manual adjustment"
 
-            if event_id is not None:
+            if event_id < 0:
+                event = self.store.get_recent_adjustment_target(guild.id, abs(event_id))
+                if event is None:
+                    await interaction.response.send_message(
+                        "That recent event was not found.",
+                        ephemeral=True,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                    return
+                family_name = event.family_name
+                reason_text = (
+                    f"{reason_text} (adjustment for event #{event.row_id}, via {event_id})"
+                )
+            elif event_id > 0:
                 event = self.store.get_event_by_id(guild.id, event_id)
                 if event is None:
                     await interaction.response.send_message(
@@ -286,7 +300,7 @@ class FoundationsBot(commands.Bot):
                     )
                     return
                 family_name = event.family_name
-                reason = f"{reason} (adjustment for event #{event_id})"
+                reason_text = f"{reason_text} (adjustment for event #{event_id})"
             elif family is not None:
                 family_role = await self._resolve_adjust_family_role(guild, family)
                 if family_role is None:
@@ -301,7 +315,7 @@ class FoundationsBot(commands.Bot):
                 family_name = family_role.name
             else:
                 await interaction.response.send_message(
-                    "Pass either `family` or `event_id`.",
+                    "Use a positive event ID, a negative recent event number, or `event_id:0` with `family`.",
                     ephemeral=True,
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
@@ -315,7 +329,7 @@ class FoundationsBot(commands.Bot):
                 guild_id=guild.id,
                 family_name=family_name,
                 points=points,
-                reason=reason,
+                reason=reason_text,
                 actor_user_id=interaction.user.id,
                 event_date=event_date,
                 created_at=_utc_naive(now),
@@ -328,7 +342,7 @@ class FoundationsBot(commands.Bot):
                 source_message_id,
             )
             await interaction.response.send_message(
-                f"Adjusted `{family_name}` by {points} point(s). Reason: {reason}",
+                f"Adjusted `{family_name}` by {points} point(s). Reason: {reason_text}",
                 ephemeral=True,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
