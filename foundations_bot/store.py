@@ -528,6 +528,31 @@ class FoundationsStore:
 
         return self._event_reference(row)
 
+    def get_adjustment_target_for_message(
+        self, guild_id: int, source_message_id: int
+    ) -> EventReference | None:
+        with self.session_factory.begin() as session:
+            row = (
+                session.execute(
+                    select(EventRow)
+                    .where(
+                        EventRow.guild_id == guild_id,
+                        EventRow.source_message_id == source_message_id,
+                        EventRow.event_type != EventType.ADJUSTMENT,
+                        EventRow.voided_at.is_(None),
+                    )
+                    .order_by(desc(EventRow.created_at), desc(EventRow.id))
+                    .limit(1)
+                )
+                .scalars()
+                .first()
+            )
+
+        if row is None:
+            return None
+
+        return self._event_reference(row)
+
     def get_event_by_id(self, guild_id: int, row_id: int) -> EventReference | None:
         with self.session_factory.begin() as session:
             row = session.execute(

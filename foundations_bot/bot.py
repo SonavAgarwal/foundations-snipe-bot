@@ -30,6 +30,8 @@ SCORE_EMOJIS = {
     9: "9️⃣",
 }
 TRACKED_SCORE_REACTIONS = set(SCORE_EMOJIS.values()) | {"🔟"}
+SCORE_REACTION_POINTS = {emoji: points for points, emoji in SCORE_EMOJIS.items() if points > 0}
+SCORE_REACTION_POINTS["🔟"] = 10
 NO_FAMILY_REACTIONS = ("🔥", "📸", "🤨", "💀", "❤️", "🙏")
 TRACKED_SCORE_REACTIONS.update(NO_FAMILY_REACTIONS)
 
@@ -65,6 +67,7 @@ class FoundationsBot(commands.Bot):
         intents.members = True
         intents.messages = True
         intents.message_content = True
+        intents.reactions = True
 
         super().__init__(
             command_prefix=commands.when_mentioned,
@@ -107,6 +110,30 @@ class FoundationsBot(commands.Bot):
             return
 
         await self._handle_spotting_message(message)
+
+    async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
+        if payload.guild_id is None:
+            return
+        if self.user is not None and payload.user_id == self.user.id:
+            return
+        if not self._is_allowed_guild_id(payload.guild_id):
+            return
+
+        target_points = SCORE_REACTION_POINTS.get(str(payload.emoji))
+        if target_points is None:
+            return
+
+        guild = self.get_guild(payload.guild_id)
+        if guild is None:
+            return
+        await self._handle_score_override_reaction(
+            guild=guild,
+            channel_id=payload.channel_id,
+            message_id=payload.message_id,
+            user_id=payload.user_id,
+            target_points=target_points,
+            trigger_emoji=str(payload.emoji),
+        )
 
     async def on_guild_join(self, guild: discord.Guild) -> None:
         if not self._is_allowed_guild_id(guild.id):
@@ -584,6 +611,13 @@ class FoundationsBot(commands.Bot):
         raise app_commands.AppCommandError(
             "You do not have permission to use this command.")
 
+    def _member_has_bot_admin_role(self, member: discord.Member) -> bool:
+        configured_role = self.config.bot_admin_role
+        if not configured_role:
+            return False
+        normalized_role = configured_role.casefold()
+        return any(role.name.casefold() == normalized_role for role in member.roles)
+
     def _is_allowed_guild_id(self, guild_id: int) -> bool:
         if self.config.guild_id is None:
             return True
@@ -718,6 +752,69 @@ class FoundationsBot(commands.Bot):
 
     async def _sync_score_reaction(self, message: discord.Message, total_points: int) -> None:
         await self._sync_reaction_emoji(message, self._score_reaction_emoji(total_points))
+
+    async def _handle_score_override_reaction(
+        self,
+        guild: discord.Guild,
+        channel_id: int,
+        message_id: int,
+        user_id: int,
+        target_points: int,
+        trigger_emoji: str,
+    ) -> None:
+        settings = self.store.get_guild_settings(guild.id)
+        if settings.sniping_channel_id is None or channel_id != settings.sniping_channel_id:
+            return
+
+        member = guild.get_member(user_id)
+        if member is None:
+            try:
+                member = await guild.fetch_member(user_id)
+            except (discord.NotFound, discord.HTTPException):
+                return
+        if not self._member_has_bot_admin_role(member):
+            return
+
+        channel = guild.get_channel(channel_id)
+        if channel is None or not isinstance(channel, discord.TextChannel):
+            return
+        try:
+            message = await channel.fetch_message(message_id)
+        except (discord.NotFound, discord.HTTPException):
+            return
+
+        try:
+            await message.remove_reaction(trigger_emoji, member)
+        except discord.HTTPException:
+            pass
+
+        target_event = self.store.get_adjustment_target_for_message(guild.id, message_id)
+        if target_event is None:
+            await self._sync_score_reaction(message, 0)
+            return
+
+        current_points = self.store.get_active_points_for_message(guild.id, message_id)
+        delta = target_points - current_points
+        if delta != 0:
+            now = discord.utils.utcnow()
+            event_date = now.astimezone(self.config.bot_timezone).date()
+            self.store.create_adjustment(
+                guild_id=guild.id,
+                family_name=target_event.family_name,
+                points=delta,
+                reason=(
+                    f"Reaction override to {target_points} point(s) "
+                    f"for event #{target_event.row_id}"
+                ),
+                actor_user_id=user_id,
+                event_date=event_date,
+                created_at=_utc_naive(now),
+                source_message_id=message_id,
+                source_channel_id=channel_id,
+                attachment_url=None,
+            )
+
+        await self._sync_score_reaction(message, target_points)
 
     async def _refresh_score_reaction(
         self, guild: discord.Guild, channel_id: int | None, message_id: int | None

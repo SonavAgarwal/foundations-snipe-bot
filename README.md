@@ -29,6 +29,7 @@ Manual adjustments:
 - `/adjust` takes `event_id` first, then `points`. Use a positive event ID, or `-1` for the most recent active non-adjustment event, `-2` for the second most recent, and so on.
 - Use `event_id:0` with `family` to target a family directly. The `family` value can be a family role or a member mention/name to use that member's family.
 - `reason` is optional and is the last `/adjust` option. Event-based adjustments update the original photo reaction.
+- Members with `BOT_ADMIN_ROLE` can also react to a spotting photo with `1️⃣` through `🔟` to override that photo's total points. The bot records the difference as an adjustment and refreshes its score reaction.
 
 Voids:
 - Use `/void event_id:<id>` to void any active scoring row you want.
