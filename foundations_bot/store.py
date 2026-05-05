@@ -528,6 +528,16 @@ class FoundationsStore:
 
         return self._event_reference(row)
 
+    def resolve_event_reference(
+        self, guild_id: int, event_id: int
+    ) -> EventReference | None:
+        """Resolve slash-command event IDs, including negative recent-event ranks."""
+        if event_id < 0:
+            return self.get_recent_adjustment_target(guild_id, abs(event_id))
+        if event_id > 0:
+            return self.get_event_by_id(guild_id, event_id)
+        return None
+
     def get_adjustment_target_for_message(
         self, guild_id: int, source_message_id: int
     ) -> EventReference | None:

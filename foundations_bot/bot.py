@@ -30,7 +30,7 @@ SCORE_EMOJIS = {
     9: "9️⃣",
 }
 TRACKED_SCORE_REACTIONS = set(SCORE_EMOJIS.values()) | {"🔟"}
-SCORE_REACTION_POINTS = {emoji: points for points, emoji in SCORE_EMOJIS.items() if points > 0}
+SCORE_REACTION_POINTS = {emoji: points for points, emoji in SCORE_EMOJIS.items()}
 SCORE_REACTION_POINTS["🔟"] = 10
 NO_FAMILY_REACTIONS = ("🔥", "📸", "🤨", "💀", "❤️", "🙏")
 TRACKED_SCORE_REACTIONS.update(NO_FAMILY_REACTIONS)
@@ -304,21 +304,8 @@ class FoundationsBot(commands.Bot):
             event = None
             reason_text = reason.strip() if reason and reason.strip() else "Manual adjustment"
 
-            if event_id < 0:
-                event = self.store.get_recent_adjustment_target(guild.id, abs(event_id))
-                if event is None:
-                    await interaction.response.send_message(
-                        "That recent event was not found.",
-                        ephemeral=True,
-                        allowed_mentions=discord.AllowedMentions.none(),
-                    )
-                    return
-                family_name = event.family_name
-                reason_text = (
-                    f"{reason_text} (adjustment for event #{event.row_id}, via {event_id})"
-                )
-            elif event_id > 0:
-                event = self.store.get_event_by_id(guild.id, event_id)
+            if event_id != 0:
+                event = self.store.resolve_event_reference(guild.id, event_id)
                 if event is None:
                     await interaction.response.send_message(
                         "That event ID was not found.",
@@ -327,7 +314,12 @@ class FoundationsBot(commands.Bot):
                     )
                     return
                 family_name = event.family_name
-                reason_text = f"{reason_text} (adjustment for event #{event_id})"
+                if event_id < 0:
+                    reason_text = (
+                        f"{reason_text} (adjustment for event #{event.row_id}, via {event_id})"
+                    )
+                else:
+                    reason_text = f"{reason_text} (adjustment for event #{event_id})"
             elif family is not None:
                 family_role = await self._resolve_adjust_family_role(guild, family)
                 if family_role is None:
@@ -389,11 +381,13 @@ class FoundationsBot(commands.Bot):
             guild = self._require_guild(interaction)
             voided = None
             if event_id is not None:
-                voided = self.store.void_event_by_id(
-                    guild_id=guild.id,
-                    row_id=event_id,
-                    voided_by_user_id=interaction.user.id,
-                )
+                event = self.store.resolve_event_reference(guild.id, event_id)
+                if event is not None:
+                    voided = self.store.void_event_by_id(
+                        guild_id=guild.id,
+                        row_id=event.row_id,
+                        voided_by_user_id=interaction.user.id,
+                    )
             elif sender is not None and sniped is not None:
                 voided = self.store.void_latest_snipe(
                     guild_id=guild.id,

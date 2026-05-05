@@ -29,10 +29,10 @@ Manual adjustments:
 - `/adjust` takes `event_id` first, then `points`. Use a positive event ID, or `-1` for the most recent active non-adjustment event, `-2` for the second most recent, and so on.
 - Use `event_id:0` with `family` to target a family directly. The `family` value can be a family role or a member mention/name to use that member's family.
 - `reason` is optional and is the last `/adjust` option. Event-based adjustments update the original photo reaction.
-- Members with `BOT_ADMIN_ROLE` can also react to a spotting photo with `1️⃣` through `🔟` to override that photo's total points. The bot records the difference as an adjustment and refreshes its score reaction.
+- Members with `BOT_ADMIN_ROLE` can also react to a spotting photo with `❌` or `1️⃣` through `🔟` to override that photo's total points. `❌` sets the photo to zero points. The bot records the difference as an adjustment and refreshes its score reaction.
 
 Voids:
-- Use `/void event_id:<id>` to void any active scoring row you want.
+- Use `/void event_id:<id>` to void any active scoring row you want. Like `/adjust`, this can be a positive event ID, or `-1` for the most recent active non-adjustment event, `-2` for the second most recent, and so on.
 - Or use `/void sender:<member> sniped:<member>` to void the most recent active spotting row for that sender-target pair.
 - Use `/recent-events` to list recent rows and their IDs.
 - Voiding removes exactly that row. If you void a spotting row, it does not remove other tagged people from the same message, and it does not remove any HOOPing bonus from that message.
