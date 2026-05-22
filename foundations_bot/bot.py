@@ -30,7 +30,8 @@ SCORE_EMOJIS = {
     9: "9️⃣",
 }
 TRACKED_SCORE_REACTIONS = set(SCORE_EMOJIS.values()) | {"🔟"}
-SCORE_REACTION_POINTS = {emoji: points for points, emoji in SCORE_EMOJIS.items()}
+SCORE_REACTION_POINTS = {
+    emoji: points for points, emoji in SCORE_EMOJIS.items()}
 SCORE_REACTION_POINTS["🔟"] = 10
 NO_FAMILY_REACTIONS = ("🔥", "📸", "🤨", "💀", "❤️", "🙏")
 TRACKED_SCORE_REACTIONS.update(NO_FAMILY_REACTIONS)
@@ -494,11 +495,17 @@ class FoundationsBot(commands.Bot):
         async def leaderboard(
             interaction: discord.Interaction, full: bool = False
         ) -> None:
-            await interaction.response.defer(thinking=False)
             guild = self._require_guild(interaction)
+            if not isinstance(interaction.user, discord.Member) or not self._member_has_bot_admin_role(interaction.user):
+                await interaction.response.send_message(
+                    "Shhh, its a secret 🤫!",
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+                return
+
+            await interaction.response.defer(thinking=False)
             snapshot = self.store.get_scoreboard(
                 guild.id, include_all_people=full)
-            settings = self.store.get_guild_settings(guild.id)
 
             lines = ["**Fam Standings**"]
             if snapshot.families:
@@ -782,12 +789,14 @@ class FoundationsBot(commands.Bot):
         except discord.HTTPException:
             pass
 
-        target_event = self.store.get_adjustment_target_for_message(guild.id, message_id)
+        target_event = self.store.get_adjustment_target_for_message(
+            guild.id, message_id)
         if target_event is None:
             await self._sync_score_reaction(message, 0)
             return
 
-        current_points = self.store.get_active_points_for_message(guild.id, message_id)
+        current_points = self.store.get_active_points_for_message(
+            guild.id, message_id)
         delta = target_points - current_points
         if delta != 0:
             now = discord.utils.utcnow()

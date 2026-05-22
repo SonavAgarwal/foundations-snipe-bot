@@ -47,10 +47,10 @@ Admin commands:
 - `/adjust <event_id> <points> [family] [reason]`
 - `/void [event_id] [sender] [sniped]`
 - `/recent-events [limit]`
+- `/leaderboard [full]`
 
 Public commands:
 - `/hello`
-- `/leaderboard [full]`
 - `/graph`
 
 Notes about `/setfam`:
