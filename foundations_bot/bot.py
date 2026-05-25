@@ -496,11 +496,7 @@ class FoundationsBot(commands.Bot):
             interaction: discord.Interaction, full: bool = False
         ) -> None:
             guild = self._require_guild(interaction)
-            if not isinstance(interaction.user, discord.Member) or not self._member_has_bot_admin_role(interaction.user):
-                await interaction.response.send_message(
-                    "Shhh, its a secret 🤫!",
-                    allowed_mentions=discord.AllowedMentions.none(),
-                )
+            if await self._send_secret_if_not_bot_admin(interaction):
                 return
 
             await interaction.response.defer(thinking=False)
@@ -562,8 +558,11 @@ class FoundationsBot(commands.Bot):
             **command_kwargs,
         )
         async def graph(interaction: discord.Interaction) -> None:
-            await interaction.response.defer(thinking=False)
             guild = self._require_guild(interaction)
+            if await self._send_secret_if_not_bot_admin(interaction):
+                return
+
+            await interaction.response.defer(thinking=False)
             now = discord.utils.utcnow().astimezone(self.config.bot_timezone).date()
             start_date = now - timedelta(days=13)
             graph_series = self.store.get_family_graph_series(
@@ -618,6 +617,16 @@ class FoundationsBot(commands.Bot):
             return False
         normalized_role = configured_role.casefold()
         return any(role.name.casefold() == normalized_role for role in member.roles)
+
+    async def _send_secret_if_not_bot_admin(self, interaction: discord.Interaction) -> bool:
+        if isinstance(interaction.user, discord.Member) and self._member_has_bot_admin_role(interaction.user):
+            return False
+
+        await interaction.response.send_message(
+            "Shhh, its a secret 🤫!",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        return True
 
     def _is_allowed_guild_id(self, guild_id: int) -> bool:
         if self.config.guild_id is None:

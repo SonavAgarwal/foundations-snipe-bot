@@ -48,10 +48,10 @@ Admin commands:
 - `/void [event_id] [sender] [sniped]`
 - `/recent-events [limit]`
 - `/leaderboard [full]`
+- `/graph`
 
 Public commands:
 - `/hello`
-- `/graph`
 
 Notes about `/setfam`:
 - `family` can be an exact role name, a role mention, or `NONE`.
